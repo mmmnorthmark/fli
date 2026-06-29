@@ -34,4 +34,12 @@ workflows for the full process.
 ### MCP server notes
 
 - The MCP HTTP endpoint requires `Accept: application/json, text/event-stream` header.
+- `fli-mcp-http` defaults to `127.0.0.1`; public binds such as `HOST=0.0.0.0` must set `FLI_MCP_AUTH_TOKEN` so FastMCP enforces bearer-token auth.
+- MCP request-size and fan-out limits live in `fli/mcp/server.py` as constants plus `FlightSearchParams` / `DateSearchParams` validation. Keep new MCP tools behind the same model-validation boundary before any network call.
 - The `fli/server/` module has been removed from the codebase.
+
+### Security conventions
+
+- GitHub Actions workflows pin external actions to full commit SHAs. Do not reintroduce mutable action refs (`@vN`, `@main`, `@master`) or installer `latest` values.
+- Reusable workflows should pass named secrets only; do not use `secrets: inherit`.
+- CLI diagnostic logs under `~/.fli/logs` redact argv values and use private permissions (`0700` directory, `0600` files). Preserve that behavior when changing error reporting.
