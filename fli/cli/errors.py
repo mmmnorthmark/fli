@@ -8,6 +8,7 @@ traceback for debugging.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -40,9 +41,20 @@ def _friendly_message(exc: BaseException) -> str:
     return f"Unexpected error: {exc.__class__.__name__}: {exc}"
 
 
+def _redact_argv(argv: list[str]) -> list[str]:
+    """Keep the executable name but remove route, date, and option values."""
+    if not argv:
+        return []
+    redacted_count = max(len(argv) - 1, 0)
+    if redacted_count == 0:
+        return [argv[0]]
+    return [argv[0], f"<{redacted_count} argument(s) redacted>"]
+
+
 def _write_log(exc: BaseException, *, command: str | None = None) -> Path:
     """Write the full traceback for ``exc`` to a log file and return the path."""
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _LOG_DIR.chmod(0o700)
     # Microsecond precision so rapid-fire errors (e.g. tests, parallel
     # legs) don't collide on the same filename and silently overwrite.
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -52,14 +64,16 @@ def _write_log(exc: BaseException, *, command: str | None = None) -> Path:
     lines.append(f"timestamp: {datetime.now(timezone.utc).isoformat()}")
     if command:
         lines.append(f"command: {command}")
-    lines.append(f"argv: {sys.argv}")
+    lines.append(f"argv: {_redact_argv(sys.argv)}")
     lines.append(f"error_type: {exc.__class__.__module__}.{exc.__class__.__name__}")
     lines.append(f"error_message: {exc}")
     lines.append("")
     lines.append("traceback:")
     lines.append("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
 
-    log_path.write_text("\n".join(lines), encoding="utf-8")
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as log_file:
+        log_file.write("\n".join(lines))
     return log_path
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -136,16 +138,31 @@ class TestWriteLogDetails:
         contents = log_path.read_text()
         assert "command:" not in contents
 
-    def test_argv_written_to_log(self):
-        import sys
-
+    def test_argv_redacted_in_log(self, monkeypatch):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["fli", "flights", "JFK", "LHR", "2026-10-25", "--format", "json"],
+        )
         try:
             raise SearchConnectionError("no route")
         except SearchConnectionError as exc:
             log_path = _write_log(exc)
         contents = log_path.read_text()
         assert "argv:" in contents
-        assert str(sys.argv) in contents
+        assert "JFK" not in contents
+        assert "LHR" not in contents
+        assert "2026-10-25" not in contents
+        assert "<6 argument(s) redacted>" in contents
+
+    def test_log_file_and_directory_are_private(self, tmp_path):
+        try:
+            raise SearchConnectionError("no route")
+        except SearchConnectionError as exc:
+            log_path = _write_log(exc)
+
+        assert stat.S_IMODE(log_path.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
 
     def test_qualified_error_type_in_log(self):
         try:
