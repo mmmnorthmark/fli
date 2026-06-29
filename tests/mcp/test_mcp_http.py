@@ -12,7 +12,8 @@ import pytest
 import uvicorn
 from fastmcp import Client
 
-from fli.mcp.server import mcp
+from fli.mcp import server as mcp_server
+from fli.mcp.server import FlightSearchConfig, mcp
 
 EXPECTED_TOOLS = {"search_flights", "search_dates", "find_airports", "get_booking_options"}
 
@@ -106,3 +107,23 @@ class TestMCPHTTP:
         for tool in tools:
             assert tool.description, f"{tool.name} is missing a description"
             assert tool.inputSchema, f"{tool.name} is missing inputSchema"
+
+
+class TestMCPHTTPSecurity:
+    """Verify HTTP binding does not accidentally expose unauthenticated tools."""
+
+    def test_public_bind_requires_auth_token(self):
+        config = FlightSearchConfig(auth_token=None)
+
+        with pytest.raises(RuntimeError, match="Refusing to start unauthenticated"):
+            mcp_server._validate_http_bind_security("0.0.0.0", config)
+
+    def test_loopback_bind_does_not_require_auth_token(self):
+        config = FlightSearchConfig(auth_token=None)
+
+        mcp_server._validate_http_bind_security("127.0.0.1", config)
+
+    def test_public_bind_allows_auth_token(self):
+        config = FlightSearchConfig(auth_token="0123456789abcdef")
+
+        mcp_server._validate_http_bind_security("0.0.0.0", config)

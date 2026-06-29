@@ -25,6 +25,9 @@ fli-mcp
 
 # Run the MCP server over HTTP (streamable)
 fli-mcp-http  # serves at http://127.0.0.1:8000/mcp/
+
+# Public HTTP binds require bearer-token auth
+FLI_MCP_AUTH_TOKEN="replace-with-a-long-random-token" HOST=0.0.0.0 fli-mcp-http
 ```
 
 ![MCP Demo](https://raw.githubusercontent.com/punitarani/fli/main/docs/assets/mcp-demo.gif)

@@ -30,7 +30,16 @@ Use the HTTP entrypoint for web-based integrations. By default it binds to `127.
 fli-mcp-http
 ```
 
-You can override host/port by calling the function directly in Python:
+Public HTTP binds require bearer-token authentication:
+
+```bash
+export FLI_MCP_AUTH_TOKEN="replace-with-a-long-random-token"
+HOST=0.0.0.0 PORT=8000 fli-mcp-http
+```
+
+Clients must send `Authorization: Bearer <token>` when `FLI_MCP_AUTH_TOKEN` is set.
+
+You can also override host/port by calling the function directly in Python:
 
 ```python
 from fli.mcp import run_http
@@ -302,6 +311,7 @@ The MCP server can be configured via environment variables:
 | `FLI_MCP_DEFAULT_SORT_BY` | Default sorting strategy | CHEAPEST |
 | `FLI_MCP_DEFAULT_DEPARTURE_WINDOW` | Default departure window (HH-HH) | null |
 | `FLI_MCP_MAX_RESULTS` | Maximum results returned | null (no limit) |
+| `FLI_MCP_AUTH_TOKEN` | Bearer token required for HTTP clients; required for public binds | null |
 
 ## Example Conversations
 

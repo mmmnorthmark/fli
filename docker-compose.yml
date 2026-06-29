@@ -6,6 +6,7 @@ services:
     environment:
       HOST: "0.0.0.0"
       PORT: "8000"
+      FLI_MCP_AUTH_TOKEN: "${FLI_MCP_AUTH_TOKEN:?Set FLI_MCP_AUTH_TOKEN before exposing fli-mcp over HTTP}"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

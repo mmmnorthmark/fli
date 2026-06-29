@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
 
 from fastmcp import FastMCP
+from fastmcp.server.auth import StaticTokenVerifier
 from mcp.types import Icon
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -75,21 +76,62 @@ class FlightSearchConfig(BaseSettings):
         gt=0,
         description="Optional maximum number of results returned by each tool.",
     )
+    auth_token: str | None = Field(
+        None,
+        min_length=16,
+        repr=False,
+        description="Bearer token required when serving MCP over a public HTTP bind.",
+    )
 
 
 CONFIG = FlightSearchConfig()
 CONFIG_SCHEMA = FlightSearchConfig.model_json_schema()
 
 
-mcp = FastMCP(
-    "Flight Search MCP Server",
-    icons=[
-        Icon(
-            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7inIjvuI88L3RleHQ+PC9zdmc+",
-            mimeType="image/svg+xml",
+MCP_ICONS = [
+    Icon(
+        src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7inIjvuI88L3RleHQ+PC9zdmc+",
+        mimeType="image/svg+xml",
+    )
+]
+
+
+def _build_mcp_server(config: FlightSearchConfig) -> FastMCP:
+    """Create the MCP server, adding bearer auth when configured."""
+    auth = None
+    if config.auth_token:
+        auth = StaticTokenVerifier(
+            tokens={
+                config.auth_token: {
+                    "client_id": "fli-mcp",
+                    "sub": "fli-mcp",
+                }
+            }
         )
-    ],
-)
+
+    return FastMCP(
+        "Flight Search MCP Server",
+        auth=auth,
+        icons=MCP_ICONS,
+    )
+
+
+mcp = _build_mcp_server(CONFIG)
+
+
+def _is_public_bind_host(host: str) -> bool:
+    """Return True when the HTTP server binds all network interfaces."""
+    normalized = host.strip().lower()
+    return normalized in {"0.0.0.0", "::", "[::]"}
+
+
+def _validate_http_bind_security(bind_host: str, config: FlightSearchConfig) -> None:
+    if _is_public_bind_host(bind_host) and not config.auth_token:
+        raise RuntimeError(
+            "Refusing to start unauthenticated MCP HTTP server on a public bind host. "
+            "Set HOST=127.0.0.1 for local-only access or set FLI_MCP_AUTH_TOKEN "
+            "to require bearer-token authentication."
+        )
 
 
 # =============================================================================
@@ -1426,6 +1468,10 @@ def configuration_resource() -> str:
                 "FLI_MCP_DEFAULT_SORT_BY": "Set the default result sorting strategy.",
                 "FLI_MCP_DEFAULT_DEPARTURE_WINDOW": "Provide a default departure window (HH-HH).",
                 "FLI_MCP_MAX_RESULTS": "Limit the maximum number of results returned by tools.",
+                "FLI_MCP_AUTH_TOKEN": (
+                    "Require bearer-token authentication for HTTP clients. "
+                    "Required when binding HTTP to all interfaces."
+                ),
             },
         },
     }
@@ -1442,13 +1488,12 @@ def run():
     mcp.run(transport="stdio")
 
 
-def run_http(host: str = "0.0.0.0", port: int = 8000) -> None:
+def run_http(host: str = "127.0.0.1", port: int = 8000) -> None:
     """Run the MCP server over HTTP (streamable).
 
-    The default host is ``0.0.0.0`` so the server is reachable from outside the
-    container when deployed (e.g. Railway, Docker). When running locally this
-    exposes the server on every network interface — set ``HOST=127.0.0.1`` to
-    restrict it to loopback.
+    The default host is ``127.0.0.1`` for local-only access. Public binds such
+    as ``HOST=0.0.0.0`` require ``FLI_MCP_AUTH_TOKEN`` so deployed HTTP servers
+    do not expose tools without bearer-token authentication.
     """
     env_host = os.getenv("HOST")
     env_port = os.getenv("PORT")
@@ -1456,6 +1501,7 @@ def run_http(host: str = "0.0.0.0", port: int = 8000) -> None:
     bind_host = env_host if env_host else host
     bind_port = int(env_port) if env_port else port
 
+    _validate_http_bind_security(bind_host, CONFIG)
     mcp.run(transport="http", host=bind_host, port=bind_port)
 
 
