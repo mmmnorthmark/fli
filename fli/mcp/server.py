@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from fastmcp import FastMCP
 from fastmcp.server.auth import StaticTokenVerifier
 from mcp.types import Icon
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from fli.core import (
@@ -138,15 +138,52 @@ def _validate_http_bind_security(bind_host: str, config: FlightSearchConfig) -> 
 # Request/Response Models
 # =============================================================================
 
+MAX_AIRPORT_CODES_PER_SIDE = 5
+MAX_AIRPORT_CODE_TEXT_LENGTH = 64
+MAX_AIRLINE_FILTERS = 20
+MAX_ALLIANCE_FILTERS = 3
+MAX_FLIGHT_NUMBER_FILTERS = 12
+MAX_PASSENGERS = 9
+MAX_DATE_SEARCH_RANGE_DAYS = 305
+MAX_TRIP_DURATION_DAYS = 60
+MAX_LAYOVER_MINUTES = 2880
+MAX_LOCALE_LENGTH = 35
+MAX_CURRENCY_LENGTH = 3
+MAX_COUNTRY_LENGTH = 2
+
+
+def _count_non_empty_csv_values(value: str) -> int:
+    return len([item for item in value.split(",") if item.strip()])
+
+
+def _validate_airport_code_list(value: str) -> str:
+    count = _count_non_empty_csv_values(value)
+    if count > MAX_AIRPORT_CODES_PER_SIDE:
+        raise ValueError(f"At most {MAX_AIRPORT_CODES_PER_SIDE} airport codes are allowed per side")
+    return value
+
+
+def _parse_iso_date(value: str, field_name: str):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must use YYYY-MM-DD format") from exc
+
 
 class FlightSearchParams(BaseModel):
     """Parameters for searching flights on a specific date."""
 
     origin: str = Field(
-        description="Departure airport IATA code(s), comma-separated for multiple (e.g., 'JFK,LGA')"
+        min_length=3,
+        max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
+        description=(
+            "Departure airport IATA code(s), comma-separated for multiple (e.g., 'JFK,LGA')"
+        ),
     )
     destination: str = Field(
-        description="Arrival airport IATA code(s), comma-separated for multiple (e.g., 'LHR,CDG')"
+        min_length=3,
+        max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
+        description="Arrival airport IATA code(s), comma-separated for multiple (e.g., 'LHR,CDG')",
     )
     departure_date: str = Field(description="Outbound travel date in YYYY-MM-DD format")
     return_date: str | None = Field(
@@ -156,7 +193,9 @@ class FlightSearchParams(BaseModel):
         None, description="Preferred departure time window in 'HH-HH' 24h format (e.g., '6-20')"
     )
     airlines: list[str] | None = Field(
-        None, description="Filter by airline IATA codes (e.g., ['BA', 'AA'])"
+        None,
+        max_length=MAX_AIRLINE_FILTERS,
+        description="Filter by airline IATA codes (e.g., ['BA', 'AA'])",
     )
     cabin_class: str = Field(
         CONFIG.default_cabin_class,
@@ -172,6 +211,7 @@ class FlightSearchParams(BaseModel):
     passengers: int = Field(
         CONFIG.default_passengers,
         ge=1,
+        le=MAX_PASSENGERS,
         description="Number of adult passengers",
     )
     exclude_basic_economy: bool = Field(
@@ -187,6 +227,8 @@ class FlightSearchParams(BaseModel):
     )
     currency: str | None = Field(
         None,
+        min_length=MAX_CURRENCY_LENGTH,
+        max_length=MAX_CURRENCY_LENGTH,
         description=(
             "ISO 4217 currency code (e.g. 'USD', 'EUR', 'GBP') to bill prices in. "
             "When omitted, Google picks based on locale (usually USD)."
@@ -194,55 +236,88 @@ class FlightSearchParams(BaseModel):
     )
     language: str | None = Field(
         None,
+        max_length=MAX_LOCALE_LENGTH,
         description="Optional BCP-47 language code (e.g. 'en-GB') passed to Google as `hl`.",
     )
     country: str | None = Field(
         None,
+        min_length=MAX_COUNTRY_LENGTH,
+        max_length=MAX_COUNTRY_LENGTH,
         description=(
             "Optional ISO 3166-1 alpha-2 country code (e.g. 'GB') for Google's `gl` param."
         ),
     )
     exclude_airlines: list[str] | None = Field(
         None,
+        max_length=MAX_AIRLINE_FILTERS,
         description="Airline IATA codes to EXCLUDE from results (e.g. ['DL', 'B6']).",
     )
     alliance: list[str] | None = Field(
         None,
+        max_length=MAX_ALLIANCE_FILTERS,
         description=("Restrict to one or more alliances: 'ONEWORLD', 'SKYTEAM', 'STAR_ALLIANCE'."),
     )
     exclude_alliance: list[str] | None = Field(
         None,
+        max_length=MAX_ALLIANCE_FILTERS,
         description="Alliance names to EXCLUDE from results.",
     )
     min_layover: int | None = Field(
         None,
         ge=1,
+        le=MAX_LAYOVER_MINUTES,
         description="Minimum layover duration in minutes (multi-stop trips only).",
     )
     max_layover: int | None = Field(
         None,
         ge=1,
+        le=MAX_LAYOVER_MINUTES,
         description="Maximum layover duration in minutes (multi-stop trips only).",
     )
+
+    @field_validator("origin", "destination")
+    @classmethod
+    def _validate_airport_count(cls, value: str) -> str:
+        return _validate_airport_code_list(value)
+
+    @model_validator(mode="after")
+    def _validate_flight_date_order(self) -> "FlightSearchParams":
+        departure = _parse_iso_date(self.departure_date, "departure_date")
+        if self.return_date is not None:
+            return_date = _parse_iso_date(self.return_date, "return_date")
+            if return_date < departure:
+                raise ValueError("return_date must be on or after departure_date")
+        return self
 
 
 class DateSearchParams(BaseModel):
     """Parameters for finding the cheapest travel dates within a range."""
 
     origin: str = Field(
-        description="Departure airport IATA code(s), comma-separated for multiple (e.g., 'JFK,LGA')"
+        min_length=3,
+        max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
+        description=(
+            "Departure airport IATA code(s), comma-separated for multiple (e.g., 'JFK,LGA')"
+        ),
     )
     destination: str = Field(
-        description="Arrival airport IATA code(s), comma-separated for multiple (e.g., 'LHR,CDG')"
+        min_length=3,
+        max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
+        description="Arrival airport IATA code(s), comma-separated for multiple (e.g., 'LHR,CDG')",
     )
     start_date: str = Field(description="Start of date range in YYYY-MM-DD format")
     end_date: str = Field(description="End of date range in YYYY-MM-DD format")
     trip_duration: int = Field(
-        3, ge=1, description="Trip duration in days (for round-trip searches)"
+        3,
+        ge=1,
+        le=MAX_TRIP_DURATION_DAYS,
+        description="Trip duration in days (for round-trip searches)",
     )
     is_round_trip: bool = Field(False, description="Search for round-trip flights")
     airlines: list[str] | None = Field(
-        None, description="Filter by airline IATA codes (e.g., ['BA', 'AA'])"
+        None,
+        max_length=MAX_AIRLINE_FILTERS,
+        description="Filter by airline IATA codes (e.g., ['BA', 'AA'])",
     )
     cabin_class: str = Field(
         CONFIG.default_cabin_class,
@@ -258,10 +333,13 @@ class DateSearchParams(BaseModel):
     passengers: int = Field(
         CONFIG.default_passengers,
         ge=1,
+        le=MAX_PASSENGERS,
         description="Number of adult passengers",
     )
     currency: str | None = Field(
         None,
+        min_length=MAX_CURRENCY_LENGTH,
+        max_length=MAX_CURRENCY_LENGTH,
         description=(
             "ISO 4217 currency code (e.g. 'USD', 'EUR', 'GBP') to bill prices in. "
             "When omitted, Google picks based on locale (usually USD)."
@@ -269,36 +347,60 @@ class DateSearchParams(BaseModel):
     )
     language: str | None = Field(
         None,
+        max_length=MAX_LOCALE_LENGTH,
         description="Optional BCP-47 language code (e.g. 'en-GB') passed to Google as `hl`.",
     )
     country: str | None = Field(
         None,
+        min_length=MAX_COUNTRY_LENGTH,
+        max_length=MAX_COUNTRY_LENGTH,
         description=(
             "Optional ISO 3166-1 alpha-2 country code (e.g. 'GB') for Google's `gl` param."
         ),
     )
     exclude_airlines: list[str] | None = Field(
         None,
+        max_length=MAX_AIRLINE_FILTERS,
         description="Airline IATA codes to EXCLUDE from results.",
     )
     alliance: list[str] | None = Field(
         None,
+        max_length=MAX_ALLIANCE_FILTERS,
         description="Restrict to alliances: 'ONEWORLD', 'SKYTEAM', 'STAR_ALLIANCE'.",
     )
     exclude_alliance: list[str] | None = Field(
         None,
+        max_length=MAX_ALLIANCE_FILTERS,
         description="Alliance names to EXCLUDE from results.",
     )
     min_layover: int | None = Field(
         None,
         ge=1,
+        le=MAX_LAYOVER_MINUTES,
         description="Minimum layover duration in minutes (multi-stop trips only).",
     )
     max_layover: int | None = Field(
         None,
         ge=1,
+        le=MAX_LAYOVER_MINUTES,
         description="Maximum layover duration in minutes (multi-stop trips only).",
     )
+
+    @field_validator("origin", "destination")
+    @classmethod
+    def _validate_airport_count(cls, value: str) -> str:
+        return _validate_airport_code_list(value)
+
+    @model_validator(mode="after")
+    def _validate_date_search_budget(self) -> "DateSearchParams":
+        start = _parse_iso_date(self.start_date, "start_date")
+        end = _parse_iso_date(self.end_date, "end_date")
+        if end < start:
+            raise ValueError("end_date must be on or after start_date")
+        date_count = (end - start).days + 1
+        if date_count > MAX_DATE_SEARCH_RANGE_DAYS:
+            raise ValueError(f"date range must be {MAX_DATE_SEARCH_RANGE_DAYS} days or fewer")
+        return self
 
 
 # =============================================================================
@@ -919,15 +1021,19 @@ def search_flights(
     origin: Annotated[
         str,
         Field(
+            min_length=3,
+            max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
             description="Departure airport IATA code(s), comma-separated for multiple "
-            "(e.g., 'JFK' or 'JFK,LGA')"
+            "(e.g., 'JFK' or 'JFK,LGA')",
         ),
     ],
     destination: Annotated[
         str,
         Field(
+            min_length=3,
+            max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
             description="Arrival airport IATA code(s), comma-separated for multiple "
-            "(e.g., 'LHR' or 'LHR,CDG')"
+            "(e.g., 'LHR' or 'LHR,CDG')",
         ),
     ],
     departure_date: Annotated[str, Field(description="Travel date in YYYY-MM-DD format")],
@@ -941,7 +1047,10 @@ def search_flights(
     ] = None,
     airlines: Annotated[
         list[str] | None,
-        Field(description="Filter by airline IATA codes (e.g., ['BA', 'AA'])"),
+        Field(
+            max_length=MAX_AIRLINE_FILTERS,
+            description="Filter by airline IATA codes (e.g., ['BA', 'AA'])",
+        ),
     ] = None,
     cabin_class: Annotated[
         str,
@@ -960,7 +1069,7 @@ def search_flights(
     ] = CONFIG.default_sort_by,
     passengers: Annotated[
         int | None,
-        Field(description="Number of adult passengers", ge=1),
+        Field(description="Number of adult passengers", ge=1, le=MAX_PASSENGERS),
     ] = None,
     exclude_basic_economy: Annotated[
         bool,
@@ -985,39 +1094,56 @@ def search_flights(
     currency: Annotated[
         str | None,
         Field(
+            min_length=MAX_CURRENCY_LENGTH,
+            max_length=MAX_CURRENCY_LENGTH,
             description=(
                 "ISO 4217 currency code (USD, EUR, GBP, JPY...) for prices. "
                 "When omitted, Google picks based on locale."
-            )
+            ),
         ),
     ] = None,
     language: Annotated[
         str | None,
-        Field(description="Optional BCP-47 language code (e.g., 'en-GB') for the `hl` URL param."),
+        Field(
+            max_length=MAX_LOCALE_LENGTH,
+            description="Optional BCP-47 language code (e.g., 'en-GB') for the `hl` URL param.",
+        ),
     ] = None,
     country: Annotated[
         str | None,
-        Field(description="Optional ISO 3166-1 alpha-2 country code (e.g., 'GB')."),
+        Field(
+            min_length=MAX_COUNTRY_LENGTH,
+            max_length=MAX_COUNTRY_LENGTH,
+            description="Optional ISO 3166-1 alpha-2 country code (e.g., 'GB').",
+        ),
     ] = None,
     exclude_airlines: Annotated[
         list[str] | None,
-        Field(description="Airline IATA codes to EXCLUDE from results."),
+        Field(
+            max_length=MAX_AIRLINE_FILTERS,
+            description="Airline IATA codes to EXCLUDE from results.",
+        ),
     ] = None,
     alliance: Annotated[
         list[str] | None,
-        Field(description="Restrict to alliances: ONEWORLD, SKYTEAM, STAR_ALLIANCE."),
+        Field(
+            max_length=MAX_ALLIANCE_FILTERS,
+            description="Restrict to alliances: ONEWORLD, SKYTEAM, STAR_ALLIANCE.",
+        ),
     ] = None,
     exclude_alliance: Annotated[
         list[str] | None,
-        Field(description="Alliance names to EXCLUDE from results."),
+        Field(
+            max_length=MAX_ALLIANCE_FILTERS, description="Alliance names to EXCLUDE from results."
+        ),
     ] = None,
     min_layover: Annotated[
         int | None,
-        Field(description="Minimum layover duration in minutes.", ge=1),
+        Field(description="Minimum layover duration in minutes.", ge=1, le=MAX_LAYOVER_MINUTES),
     ] = None,
     max_layover: Annotated[
         int | None,
-        Field(description="Maximum layover duration in minutes.", ge=1),
+        Field(description="Maximum layover duration in minutes.", ge=1, le=MAX_LAYOVER_MINUTES),
     ] = None,
 ) -> dict[str, Any]:
     """Search for flights between two airports on a specific date.
@@ -1070,22 +1196,26 @@ def search_dates(
     origin: Annotated[
         str,
         Field(
+            min_length=3,
+            max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
             description="Departure airport IATA code(s), comma-separated for multiple "
-            "(e.g., 'JFK' or 'JFK,LGA')"
+            "(e.g., 'JFK' or 'JFK,LGA')",
         ),
     ],
     destination: Annotated[
         str,
         Field(
+            min_length=3,
+            max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
             description="Arrival airport IATA code(s), comma-separated for multiple "
-            "(e.g., 'LHR' or 'LHR,CDG')"
+            "(e.g., 'LHR' or 'LHR,CDG')",
         ),
     ],
     start_date: Annotated[str, Field(description="Start of date range in YYYY-MM-DD format")],
     end_date: Annotated[str, Field(description="End of date range in YYYY-MM-DD format")],
     trip_duration: Annotated[
         int,
-        Field(description="Trip duration in days for round-trips", ge=1),
+        Field(description="Trip duration in days for round-trips", ge=1, le=MAX_TRIP_DURATION_DAYS),
     ] = 3,
     is_round_trip: Annotated[
         bool,
@@ -1093,7 +1223,10 @@ def search_dates(
     ] = False,
     airlines: Annotated[
         list[str] | None,
-        Field(description="Filter by airline IATA codes (e.g., ['BA', 'AA'])"),
+        Field(
+            max_length=MAX_AIRLINE_FILTERS,
+            description="Filter by airline IATA codes (e.g., ['BA', 'AA'])",
+        ),
     ] = None,
     cabin_class: Annotated[
         str,
@@ -1113,39 +1246,58 @@ def search_dates(
     ] = False,
     passengers: Annotated[
         int | None,
-        Field(description="Number of adult passengers", ge=1),
+        Field(description="Number of adult passengers", ge=1, le=MAX_PASSENGERS),
     ] = None,
     currency: Annotated[
         str | None,
-        Field(description="ISO 4217 currency code (USD, EUR, GBP, JPY...) for prices."),
+        Field(
+            min_length=MAX_CURRENCY_LENGTH,
+            max_length=MAX_CURRENCY_LENGTH,
+            description="ISO 4217 currency code (USD, EUR, GBP, JPY...) for prices.",
+        ),
     ] = None,
     language: Annotated[
         str | None,
-        Field(description="Optional BCP-47 language code (e.g., 'en-GB') for the `hl` URL param."),
+        Field(
+            max_length=MAX_LOCALE_LENGTH,
+            description="Optional BCP-47 language code (e.g., 'en-GB') for the `hl` URL param.",
+        ),
     ] = None,
     country: Annotated[
         str | None,
-        Field(description="Optional ISO 3166-1 alpha-2 country code (e.g., 'GB')."),
+        Field(
+            min_length=MAX_COUNTRY_LENGTH,
+            max_length=MAX_COUNTRY_LENGTH,
+            description="Optional ISO 3166-1 alpha-2 country code (e.g., 'GB').",
+        ),
     ] = None,
     exclude_airlines: Annotated[
         list[str] | None,
-        Field(description="Airline IATA codes to EXCLUDE from results."),
+        Field(
+            max_length=MAX_AIRLINE_FILTERS,
+            description="Airline IATA codes to EXCLUDE from results.",
+        ),
     ] = None,
     alliance: Annotated[
         list[str] | None,
-        Field(description="Restrict to alliances: ONEWORLD, SKYTEAM, STAR_ALLIANCE."),
+        Field(
+            max_length=MAX_ALLIANCE_FILTERS,
+            description="Restrict to alliances: ONEWORLD, SKYTEAM, STAR_ALLIANCE.",
+        ),
     ] = None,
     exclude_alliance: Annotated[
         list[str] | None,
-        Field(description="Alliance names to EXCLUDE from results."),
+        Field(
+            max_length=MAX_ALLIANCE_FILTERS, description="Alliance names to EXCLUDE from results."
+        ),
     ] = None,
     min_layover: Annotated[
         int | None,
-        Field(description="Minimum layover duration in minutes.", ge=1),
+        Field(description="Minimum layover duration in minutes.", ge=1, le=MAX_LAYOVER_MINUTES),
     ] = None,
     max_layover: Annotated[
         int | None,
-        Field(description="Maximum layover duration in minutes.", ge=1),
+        Field(description="Maximum layover duration in minutes.", ge=1, le=MAX_LAYOVER_MINUTES),
     ] = None,
 ) -> dict[str, Any]:
     """Find the cheapest travel dates between two airports within a date range.
@@ -1194,22 +1346,31 @@ def _search_dates_from_params(params: DateSearchParams) -> dict[str, Any]:
 def get_booking_options(
     origin: Annotated[
         str,
-        Field(description="Departure airport IATA code(s), comma-separated for multiple"),
+        Field(
+            min_length=3,
+            max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
+            description="Departure airport IATA code(s), comma-separated for multiple",
+        ),
     ],
     destination: Annotated[
         str,
-        Field(description="Arrival airport IATA code(s), comma-separated for multiple"),
+        Field(
+            min_length=3,
+            max_length=MAX_AIRPORT_CODE_TEXT_LENGTH,
+            description="Arrival airport IATA code(s), comma-separated for multiple",
+        ),
     ],
     departure_date: Annotated[str, Field(description="Travel date in YYYY-MM-DD format")],
     flight_numbers: Annotated[
         list[str] | None,
         Field(
+            max_length=MAX_FLIGHT_NUMBER_FILTERS,
             description=(
                 "Flight numbers identifying the itinerary to price, in order, taken from a "
                 "prior search_flights result (e.g. ['BA178'] one-way, ['AA100', 'AA200'] "
                 "round-trip). Accepts bare numbers ('178') or airline-prefixed ('BA178'). "
                 "Omit to price the top result."
-            )
+            ),
         ),
     ] = None,
     return_date: Annotated[
@@ -1226,11 +1387,14 @@ def get_booking_options(
     ] = "ANY",
     passengers: Annotated[
         int | None,
-        Field(description="Number of adult passengers", ge=1),
+        Field(description="Number of adult passengers", ge=1, le=MAX_PASSENGERS),
     ] = None,
     airlines: Annotated[
         list[str] | None,
-        Field(description="Filter by airline IATA codes (e.g., ['BA', 'AA'])"),
+        Field(
+            max_length=MAX_AIRLINE_FILTERS,
+            description="Filter by airline IATA codes (e.g., ['BA', 'AA'])",
+        ),
     ] = None,
     exclude_basic_economy: Annotated[
         bool,
@@ -1238,15 +1402,26 @@ def get_booking_options(
     ] = False,
     currency: Annotated[
         str | None,
-        Field(description="ISO 4217 currency code (USD, EUR, GBP, JPY...) for prices."),
+        Field(
+            min_length=MAX_CURRENCY_LENGTH,
+            max_length=MAX_CURRENCY_LENGTH,
+            description="ISO 4217 currency code (USD, EUR, GBP, JPY...) for prices.",
+        ),
     ] = None,
     language: Annotated[
         str | None,
-        Field(description="Optional BCP-47 language code (e.g., 'en-GB') for the `hl` URL param."),
+        Field(
+            max_length=MAX_LOCALE_LENGTH,
+            description="Optional BCP-47 language code (e.g., 'en-GB') for the `hl` URL param.",
+        ),
     ] = None,
     country: Annotated[
         str | None,
-        Field(description="Optional ISO 3166-1 alpha-2 country code (e.g., 'GB')."),
+        Field(
+            min_length=MAX_COUNTRY_LENGTH,
+            max_length=MAX_COUNTRY_LENGTH,
+            description="Optional ISO 3166-1 alpha-2 country code (e.g., 'GB').",
+        ),
     ] = None,
     departure_window: Annotated[
         str | None,
@@ -1261,23 +1436,31 @@ def get_booking_options(
     ] = CONFIG.default_sort_by,
     exclude_airlines: Annotated[
         list[str] | None,
-        Field(description="Airline IATA codes to EXCLUDE from results."),
+        Field(
+            max_length=MAX_AIRLINE_FILTERS,
+            description="Airline IATA codes to EXCLUDE from results.",
+        ),
     ] = None,
     alliance: Annotated[
         list[str] | None,
-        Field(description="Restrict to alliances: ONEWORLD, SKYTEAM, STAR_ALLIANCE."),
+        Field(
+            max_length=MAX_ALLIANCE_FILTERS,
+            description="Restrict to alliances: ONEWORLD, SKYTEAM, STAR_ALLIANCE.",
+        ),
     ] = None,
     exclude_alliance: Annotated[
         list[str] | None,
-        Field(description="Alliance names to EXCLUDE from results."),
+        Field(
+            max_length=MAX_ALLIANCE_FILTERS, description="Alliance names to EXCLUDE from results."
+        ),
     ] = None,
     min_layover: Annotated[
         int | None,
-        Field(description="Minimum layover duration in minutes.", ge=1),
+        Field(description="Minimum layover duration in minutes.", ge=1, le=MAX_LAYOVER_MINUTES),
     ] = None,
     max_layover: Annotated[
         int | None,
-        Field(description="Maximum layover duration in minutes.", ge=1),
+        Field(description="Maximum layover duration in minutes.", ge=1, le=MAX_LAYOVER_MINUTES),
     ] = None,
     emissions: Annotated[
         str,
