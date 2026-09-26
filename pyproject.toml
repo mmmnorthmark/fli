@@ -30,6 +30,7 @@ dependencies = [
     "pydantic>=2.10.4",
     "python-dotenv>=1.2.2",
     "ratelimit>=2.2.1",
+    "rich>=13.8.0",
     "tenacity>=9.0.0",
     "typer>=0.15.1",
 ]
@@ -39,6 +40,7 @@ mcp = [
     "authlib>=1.7.1",
     "fastapi>=0.115.6",
     "fastmcp>=3.2",
+    "mcp>=1.2.0",
     "pyjwt>=2.13.0",
     "pydantic-settings>=2.0.0",
     "python-multipart>=0.0.31",
