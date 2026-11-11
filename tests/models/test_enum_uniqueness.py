@@ -57,3 +57,8 @@ def test_h4_is_hisky_europe():
     """Google returns H4 for HiSky Europe (e.g. Brussels-Bucharest); unknown codes drop the row."""
     assert display_name(Airline.H4) == "HiSky Europe"
     assert _safe_airline("H4") is Airline.H4
+
+
+def test_jx_is_starlux():
+    """IATA reassigned JX from DAC East Africa to STARLUX Airlines."""
+    assert display_name(Airline.JX) == "STARLUX Airlines"
