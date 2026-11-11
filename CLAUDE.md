@@ -130,8 +130,12 @@ page's JavaScript can produce, so the client issues
 
 Consequences to keep in mind when changing search code:
 
-- `emissions`, `bags` and `exclude_basic_economy` have no `tfs` field and no
-  post-hoc equivalent; `unsupported_filters()` names them and the caller warns.
+- `emissions`, checked bags and `exclude_basic_economy` have no `tfs` field and
+  no post-hoc equivalent; `unsupported_filters()` names them and the caller
+  warns. Carry-on *is* encoded (top-level `tfs` field 13 = `{2: 1, 3: 0}`,
+  upstream #268) and prices change on carriers that charge for cabin bags
+  (ORD→DEN F9 $100 → $135 with `-b 0 --carry-on`, 2026-11-11). Upstream
+  #271 fixed the f.req bags slot order to `[carry_on, checked_bags]`.
 - Airline include/exclude, price cap, max duration and departure windows are
   applied after fetching by `apply_client_side_filters()`; stops, cabin,
   passengers, alliances and layover bounds are encoded into the request.
@@ -338,7 +342,7 @@ other validators).
 The API surface still accepts the `emissions` filter, but the search-page
 transport has no `tfs` field for it, so it is **currently ignored** — the
 search logs a warning naming it and returns unfiltered results. The same is
-true of `checked_bags` / `carry_on` and `exclude_basic_economy`. See
+true of `checked_bags` and `exclude_basic_economy`; `carry_on` is encoded. See
 "Search transport" above.
 
 Independently of that: raw CO₂ figures are intentionally **not** returned in
